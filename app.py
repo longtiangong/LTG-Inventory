@@ -1,5 +1,6 @@
-from datetime import datetime
+from datetime import date, datetime
 import os
+import re
 import pandas as pd
 import streamlit as st
 
@@ -10,59 +11,108 @@ st.set_page_config(
 
 # 資料儲存檔案
 DATA_FILE = "temple_inventory.csv"
+DATE_PATTERN = re.compile(r"^[0-9]{8}$")
+MONTH_NUMERALS = (
+    "",
+    "一",
+    "二",
+    "三",
+    "四",
+    "五",
+    "六",
+    "七",
+    "八",
+    "九",
+    "十",
+    "十一",
+    "十二",
+)
+INVENTORY_COLUMNS = [
+    "項目",
+    "上一次月份",
+    "上一次月份總庫存量",
+    "進貨日期",
+    "進貨數量",
+    "使用日期",
+    "使用項目",
+    "使用數量",
+    "盤點日期",
+    "盤點數量",
+    "結果",
+    "總庫存量",
+    "供應商名稱",
+    "電話",
+    "聯絡人",
+]
+
+
+def parse_date(value):
+    date_text = str(value).strip()
+    if not DATE_PATTERN.fullmatch(date_text):
+        return None
+    try:
+        return datetime.strptime(date_text, "%Y%m%d").date()
+    except ValueError:
+        return None
+
+
+def format_month(value):
+    parsed_date = parse_date(value)
+    if parsed_date is None:
+        return ""
+    return f"{parsed_date.year}{MONTH_NUMERALS[parsed_date.month]}月"
+
 
 # 初始化資料結構
 def load_data():
     if os.path.exists(DATA_FILE):
-        return pd.read_csv(DATA_FILE)
-    else:
-        # 建立預設範例資料（對應您提供的欄位）
-        df = pd.DataFrame(
-            columns=[
-                "項目",
-                "進貨日期",
-                "進貨數量",
-                "使用日期",
-                "使用項目",
-                "使用數量",
-                "盤點日期",
-                "盤點數量",
-                "結果",
-                "補貨日期",
-                "補貨數量",
-                "總庫存量",
-                "上一次月份總庫存量",
-                "供應商名稱",
-                "電話",
-                "聯絡人",
-            ]
+        df = pd.read_csv(
+            DATA_FILE,
+            dtype={
+                "進貨日期": "string",
+                "使用日期": "string",
+                "盤點日期": "string",
+            },
         )
-        # 載入您的範例資料
-        sample_data = {
-            "項目": "壽麵",
-            "進貨日期": "20260816",
-            "進貨數量": 100,
-            "使用日期": "20260930",
-            "使用項目": "九月聖誕",
-            "使用數量": 80,
-            "盤點日期": "20261019",
-            "盤點數量": 20,
-            "結果": "相符",
-            "補貨日期": "20261021",
-            "補貨數量": 100,
-            "總庫存量": 120,
-            "供應商名稱": "龍口麵",
-            "電話": "0910143517",
-            "聯絡人": "張智順",
-        }
-        df = pd.concat([df, pd.DataFrame([sample_data])], ignore_index=True)
-        df.to_csv(DATA_FILE, index=False)
-        return df
+        df = df.drop(columns=["補貨日期", "補貨數量"], errors="ignore")
+        if "上一次月份" not in df.columns:
+            df["上一次月份"] = df.get("進貨日期", pd.Series(index=df.index)).map(
+                format_month
+            )
+        if "上一次月份總庫存量" not in df.columns:
+            df["上一次月份總庫存量"] = 0
+        for column in INVENTORY_COLUMNS:
+            if column not in df.columns:
+                df[column] = 0 if column in {
+                    "上一次月份總庫存量",
+                    "進貨數量",
+                    "使用數量",
+                    "盤點數量",
+                    "總庫存量",
+                } else ""
+        return df[INVENTORY_COLUMNS]
+
+    sample_data = {
+        "項目": "壽麵",
+        "上一次月份": "2026十月",
+        "上一次月份總庫存量": 0,
+        "進貨日期": "20261020",
+        "進貨數量": 100,
+        "使用日期": "20260930",
+        "使用項目": "九月聖誕",
+        "使用數量": 80,
+        "盤點日期": "20261019",
+        "盤點數量": 20,
+        "結果": "相符",
+        "總庫存量": 20,
+        "供應商名稱": "龍口麵",
+        "電話": "0910143517",
+        "聯絡人": "張智順",
+    }
+    return pd.DataFrame([sample_data], columns=INVENTORY_COLUMNS)
 
 
 df = load_data()
-if "上一次月份總庫存量" not in df.columns:
-    df["上一次月份總庫存量"] = pd.NA
 
 st.title("⛩️ 宮廟物資庫存管理系統 {app_version}".format(app_version="v1.0"))
 st.markdown("---")
@@ -74,12 +124,12 @@ SAFETY_STOCK = 100
 alerts = []
 for index, row in df.iterrows():
     item_name = row["項目"]
-    total_stock = int(row["總庫存量"])
-    check_stock = int(row["盤點數量"])
+    total_stock = pd.to_numeric(row["總庫存量"], errors="coerce")
+    check_stock = pd.to_numeric(row["盤點數量"], errors="coerce")
 
-    if total_stock < SAFETY_STOCK:
+    if pd.notna(total_stock) and total_stock < SAFETY_STOCK:
         alerts.append(f"【{item_name}】總庫存量 ({total_stock}包) 小於安全數量 {SAFETY_STOCK} 包！")
-    if check_stock < SAFETY_STOCK:
+    if pd.notna(check_stock) and check_stock < SAFETY_STOCK:
         alerts.append(
             f"【{item_name}】盤點數量 ({check_stock}包) 小於安全數量 {SAFETY_STOCK} 包！"
         )
@@ -112,28 +162,24 @@ AUTH_PASSWORD = "ltg6399"
 is_authenticated = password == AUTH_PASSWORD
 
 if not password:
-    st.sidebar.info("提示：預設登入密碼為 `ltg+生日`")
+    st.sidebar.info("提示：預設登入密碼為 `龍天宮+生日`")
 elif not is_authenticated:
     st.sidebar.error("密碼錯誤，無法進行新增與修改！")
 
 # ----------------- 主畫面：現有庫存總覽 -----------------
 st.subheader("📦 目前庫存總覽表")
 overview = df.copy()
-restock_dates = pd.to_datetime(
-    overview["補貨日期"].astype("string").str.replace(r"\.0$", "", regex=True),
-    format="%Y%m%d",
-    errors="coerce",
-)
-overview["補貨月份"] = restock_dates.map(
-    lambda date: f"{date.month}月" if not pd.isna(date) else "未設定"
-)
+overview["進貨月份"] = overview["進貨日期"].map(format_month)
 status_stock = pd.to_numeric(
     overview["上一次月份總庫存量"], errors="coerce"
 ).fillna(pd.to_numeric(overview["總庫存量"], errors="coerce"))
 overview["補貨狀態"] = status_stock.map(
     lambda stock: "結案" if pd.notna(stock) and stock > SAFETY_STOCK else "待補貨"
 )
-st.dataframe(overview, use_container_width=True)
+st.dataframe(
+    overview.drop(columns=["進貨日期", "進貨數量", "使用日期", "盤點日期"]),
+    use_container_width=True,
+)
 
 # ----------------- 增修管理區 (需密碼) -----------------
 st.markdown("---")
@@ -141,37 +187,92 @@ st.subheader("📝 庫存資料增修作業")
 
 if is_authenticated:
     st.success("✅ 密碼驗證成功，您可以進行新增或修改。")
+    if "save_message" in st.session_state:
+        st.success(st.session_state.pop("save_message"))
+
+    item_options = [
+        "壽麵",
+        "香品",
+        "金紙",
+        "平安符",
+        "光明燈油",
+        "其他 (自行輸入)",
+    ]
+    selected_item = st.selectbox("1. 項目", item_options)
+    item = selected_item
+    if selected_item == "其他 (自行輸入)":
+        item = st.text_input("輸入自訂項目名稱")
+
+    existing_rows = df[df["項目"] == item]
+    existing = existing_rows.iloc[0] if not existing_rows.empty else None
+
+    def existing_value(column, default):
+        if existing is None or pd.isna(existing[column]) or existing[column] == "":
+            return default
+        return existing[column]
+
+    current_date = date.today().strftime("%Y%m%d")
+    previous_month = format_month(
+        existing_value("進貨日期", current_date)
+    )
 
     with st.form("inventory_form"):
         col1, col2, col3 = st.columns(3)
 
         with col1:
-            item = st.selectbox(
-                "1. 項目",
-                [
-                    "壽麵",
-                    "香品",
-                    "金紙",
-                    "平安符",
-                    "光明燈油",
-                    "其他 (自行輸入)",
-                ],
+            st.text(f"2. 上一次月份：{previous_month}")
+            previous_month_stock = st.number_input(
+                "3. 上一次月份總庫存量",
+                min_value=0,
+                value=int(existing_value("上一次月份總庫存量", 0)),
+                step=1,
+                key=f"previous_month_stock_{item}",
             )
-            if item == "其他 (自行輸入)":
-                item = st.text_input("輸入自訂項目名稱")
-
-            restock_date1 = st.text_input("2. 進貨日期 (例: 20260816)", "20260816")
-            restock_qty1 = st.number_input("3. 進貨數量", value=100)
-            use_date = st.text_input("4. 使用日期 (例: 20260930)", "20260930")
-            use_item = st.text_input("5. 使用項目", "九月聖誕")
+            purchase_date = st.text_input(
+                "4. 進貨日期（西元年月日，共 8 碼）",
+                str(existing_value("進貨日期", current_date)),
+                key=f"purchase_date_{item}",
+            )
+            purchase_qty = st.number_input(
+                "5. 進貨數量",
+                min_value=0,
+                value=int(existing_value("進貨數量", 100)),
+                step=1,
+                key=f"purchase_qty_{item}",
+            )
+            use_date = st.text_input(
+                "6. 使用日期（西元年月日，共 8 碼）",
+                str(existing_value("使用日期", current_date)),
+                key=f"use_date_{item}",
+            )
 
         with col2:
-            use_qty = st.number_input("6. 使用數量", value=80)
-            check_date = st.text_input("7. 盤點日期 (例: 20261019)", "20261019")
-            check_qty = st.number_input("8. 盤點數量", value=20)
+            use_item = st.text_input(
+                "7. 使用項目",
+                str(existing_value("使用項目", "")),
+                key=f"use_item_{item}",
+            )
+            use_qty = st.number_input(
+                "8. 使用數量",
+                min_value=0,
+                value=int(existing_value("使用數量", 0)),
+                step=1,
+                key=f"use_qty_{item}",
+            )
+            check_date = st.text_input(
+                "9. 盤點日期（西元年月日，共 8 碼）",
+                str(existing_value("盤點日期", current_date)),
+                key=f"check_date_{item}",
+            )
+            check_qty = st.number_input(
+                "10. 盤點數量",
+                min_value=0,
+                value=int(existing_value("盤點數量", 0)),
+                step=1,
+                key=f"check_qty_{item}",
+            )
 
-            # 自動計算結果 (盤盈/盤虧/相符)
-            calculated_stock = restock_qty1 - use_qty
+            calculated_stock = purchase_qty - use_qty
             if check_qty > calculated_stock:
                 result_status = "盤盈"
             elif check_qty < calculated_stock:
@@ -179,55 +280,74 @@ if is_authenticated:
             else:
                 result_status = "相符"
 
-            st.text(f"9. 結果自動判定：{result_status}")
-
-            restock_date2 = st.text_input("10. 補貨日期 (例: 20261021)", "20261021")
-            previous_month_stock = st.number_input(
-                "11. 上一次月份總庫存量（進貨前）", min_value=0, value=0, step=1
-            )
-            st.caption("此數量用於判斷補貨狀態：大於安全庫存結案，否則待補貨。")
+            st.text(f"11. 結果自動判定：{result_status}")
 
         with col3:
-            restock_qty2 = st.number_input("12. 補貨數量", value=100)
-
-            # 自動計算總庫存量 = 盤點數量 + 第二次補貨數量
-            total_inventory = check_qty + restock_qty2
-            st.metric(label="13. 總庫存量 (自動計算)", value=total_inventory)
-
-            supplier = st.text_input("14. 供應商名稱", "龍口麵")
-            phone = st.text_input("15. 電話", "0910143517")
-            contact = st.text_input("16. 聯絡人", "張智順")
+            st.metric(label="12. 總庫存量（進貨數量－使用數量）", value=calculated_stock)
+            supplier = st.text_input(
+                "13. 供應商名稱",
+                str(existing_value("供應商名稱", "龍口麵")),
+                key=f"supplier_{item}",
+            )
+            phone = st.text_input(
+                "14. 電話",
+                str(existing_value("電話", "")),
+                key=f"phone_{item}",
+            )
+            contact = st.text_input(
+                "15. 聯絡人",
+                str(existing_value("聯絡人", "")),
+                key=f"contact_{item}",
+            )
 
         submitted = st.form_submit_button("儲存 / 更新庫存資料")
 
         if submitted:
-            new_row = {
-                "項目": item,
-                "進貨日期": restock_date1,
-                "進貨數量": restock_qty1,
-                "使用日期": use_date,
-                "使用項目": use_item,
-                "使用數量": use_qty,
-                "盤點日期": check_date,
-                "盤點數量": check_qty,
-                "結果": result_status,
-                "補貨日期": restock_date2,
-                "補貨數量": restock_qty2,
-                "總庫存量": total_inventory,
-                "上一次月份總庫存量": previous_month_stock,
-                "供應商名稱": supplier,
-                "電話": phone,
-                "聯絡人": contact,
-            }
+            invalid_dates = [
+                label
+                for label, value in (
+                    ("進貨日期", purchase_date),
+                    ("使用日期", use_date),
+                    ("盤點日期", check_date),
+                )
+                if parse_date(value) is None
+            ]
+            if not item.strip():
+                st.error("請輸入項目名稱。")
+            elif invalid_dates:
+                st.error(
+                    "日期格式錯誤或日期不存在，請輸入 8 碼有效西元日期（YYYYMMDD）："
+                    + "、".join(invalid_dates)
+                )
+            else:
+                new_row = {
+                    "項目": item,
+                    "上一次月份": previous_month,
+                    "上一次月份總庫存量": previous_month_stock,
+                    "進貨日期": purchase_date,
+                    "進貨數量": purchase_qty,
+                    "使用日期": use_date,
+                    "使用項目": use_item,
+                    "使用數量": use_qty,
+                    "盤點日期": check_date,
+                    "盤點數量": check_qty,
+                    "結果": result_status,
+                    "總庫存量": calculated_stock,
+                    "供應商名稱": supplier,
+                    "電話": phone,
+                    "聯絡人": contact,
+                }
 
-            # 【修正處】：若該項目已存在，先過濾掉舊的，再與新資料合併，避開型態錯誤
-            if item in df["項目"].values:
-                df = df[df["項目"] != item]
-
-            df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-
-            df.to_csv(DATA_FILE, index=False)
-            st.success(f"【{item}】資料已成功更新！")
-            st.rerun()
+                updated_df = df[df["項目"] != item]
+                updated_df = pd.concat(
+                    [updated_df, pd.DataFrame([new_row])], ignore_index=True
+                )[INVENTORY_COLUMNS]
+                try:
+                    updated_df.to_csv(DATA_FILE, index=False)
+                except OSError as error:
+                    st.error(f"庫存資料儲存失敗：{error}")
+                else:
+                    st.session_state["save_message"] = f"【{item}】資料已成功更新！"
+                    st.rerun()
 else:
     st.warning("🔒 請先於左側側邊欄輸入正確密碼，解鎖後即可編輯表單。")
