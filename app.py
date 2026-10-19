@@ -306,7 +306,9 @@ if is_authenticated:
                 for value in quantity_values
             )
             calculated_stock = (
-                int(purchase_qty_text) - int(use_qty_text)
+                int(previous_month_stock_text)
+                + int(purchase_qty_text)
+                - int(use_qty_text)
                 if quantities_valid
                 else None
             )
@@ -323,7 +325,7 @@ if is_authenticated:
 
         with col3:
             st.metric(
-                label="12. 總庫存量（進貨數量－使用數量）",
+                label="12. 總庫存量（上一次月份總庫存量＋進貨數量－使用數量）",
                 value=calculated_stock if calculated_stock is not None else "—",
             )
             supplier = st.text_input(
