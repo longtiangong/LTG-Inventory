@@ -12,6 +12,7 @@ st.set_page_config(
 # 資料儲存檔案
 DATA_FILE = "temple_inventory.csv"
 DATE_PATTERN = re.compile(r"^[0-9]{8}$")
+INTEGER_PATTERN = re.compile(r"^[0-9]+$")
 MONTH_NUMERALS = (
     "",
     "一",
@@ -92,24 +93,7 @@ def load_data():
                 } else ""
         return df[INVENTORY_COLUMNS]
 
-    sample_data = {
-        "項目": "壽麵",
-        "上一次月份": "2026十月",
-        "上一次月份總庫存量": 0,
-        "進貨日期": "20261020",
-        "進貨數量": 100,
-        "使用日期": "20260930",
-        "使用項目": "九月聖誕",
-        "使用數量": 80,
-        "盤點日期": "20261019",
-        "盤點數量": 20,
-        "結果": "相符",
-        "總庫存量": 20,
-        "供應商名稱": "龍口麵",
-        "電話": "0910143517",
-        "聯絡人": "張智順",
-    }
-    return pd.DataFrame([sample_data], columns=INVENTORY_COLUMNS)
+    return pd.DataFrame(columns=INVENTORY_COLUMNS)
 
 
 df = load_data()
@@ -176,8 +160,16 @@ status_stock = pd.to_numeric(
 overview["補貨狀態"] = status_stock.map(
     lambda stock: "結案" if pd.notna(stock) and stock > SAFETY_STOCK else "待補貨"
 )
+overview_display = overview.drop(
+    columns=["進貨日期", "進貨數量", "使用日期", "盤點日期"]
+)
 st.dataframe(
-    overview.drop(columns=["進貨日期", "進貨數量", "使用日期", "盤點日期"]),
+    overview_display.style.map(
+        lambda status: "color: red; font-weight: bold"
+        if status == "待補貨"
+        else "",
+        subset=["補貨狀態"],
+    ),
     use_container_width=True,
 )
 
@@ -215,17 +207,20 @@ if is_authenticated:
     previous_month = format_month(
         existing_value("進貨日期", current_date)
     )
+    previous_month_stock_value = pd.to_numeric(
+        existing_value("上一次月份總庫存量", 0), errors="coerce"
+    )
+    if pd.isna(previous_month_stock_value):
+        previous_month_stock_value = 0
 
     with st.form("inventory_form"):
         col1, col2, col3 = st.columns(3)
 
         with col1:
             st.text(f"2. 上一次月份：{previous_month}")
-            previous_month_stock = st.number_input(
+            previous_month_stock_text = st.text_input(
                 "3. 上一次月份總庫存量",
-                min_value=0,
-                value=int(existing_value("上一次月份總庫存量", 0)),
-                step=1,
+                value=str(int(previous_month_stock_value)),
                 key=f"previous_month_stock_{item}",
             )
             purchase_date = st.text_input(
@@ -303,6 +298,7 @@ if is_authenticated:
         submitted = st.form_submit_button("儲存 / 更新庫存資料")
 
         if submitted:
+            previous_month_stock_text = previous_month_stock_text.strip()
             invalid_dates = [
                 label
                 for label, value in (
@@ -314,6 +310,8 @@ if is_authenticated:
             ]
             if not item.strip():
                 st.error("請輸入項目名稱。")
+            elif not INTEGER_PATTERN.fullmatch(previous_month_stock_text):
+                st.error("上一次月份總庫存量請輸入 0 或正整數，不可包含加減符號。")
             elif invalid_dates:
                 st.error(
                     "日期格式錯誤或日期不存在，請輸入 8 碼有效西元日期（YYYYMMDD）："
@@ -323,7 +321,7 @@ if is_authenticated:
                 new_row = {
                     "項目": item,
                     "上一次月份": previous_month,
-                    "上一次月份總庫存量": previous_month_stock,
+                    "上一次月份總庫存量": int(previous_month_stock_text),
                     "進貨日期": purchase_date,
                     "進貨數量": purchase_qty,
                     "使用日期": use_date,
