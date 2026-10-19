@@ -1,4 +1,5 @@
 from datetime import datetime
+import json
 import os
 import re
 import pandas as pd
@@ -101,6 +102,41 @@ df = load_data()
 st.title("⛩️ 宮廟物資庫存管理系統 {app_version}".format(app_version="v1.0"))
 st.markdown("---")
 
+# ----------------- 警報檢查區 -----------------
+SAFETY_STOCK = 100
+alerts = []
+for _, row in df.iterrows():
+    item_name = row["項目"]
+    total_stock = pd.to_numeric(row["總庫存量"], errors="coerce")
+    check_stock = pd.to_numeric(row["盤點數量"], errors="coerce")
+
+    if pd.notna(total_stock) and total_stock < SAFETY_STOCK:
+        alerts.append(
+            f"【{item_name}】總庫存量 ({total_stock:g}包) 小於安全數量 {SAFETY_STOCK} 包！"
+        )
+    if pd.notna(check_stock) and check_stock < SAFETY_STOCK:
+        alerts.append(
+            f"【{item_name}】盤點數量 ({check_stock:g}包) 小於安全數量 {SAFETY_STOCK} 包！"
+        )
+
+if alerts:
+    st.error("🚨 庫存短缺警報：")
+    for alert in alerts:
+        st.markdown(
+            f'<p style="color:red; font-weight:bold; font-size:18px;">{alert}</p>',
+            unsafe_allow_html=True,
+        )
+
+    alert_text = json.dumps("警告！" + "，".join(alerts), ensure_ascii=False)
+    js_code = f"""
+    <script>
+        const speech = new SpeechSynthesisUtterance({alert_text});
+        speech.lang = 'zh-TW';
+        window.speechSynthesis.speak(speech);
+    </script>
+    """
+    st.components.v1.html(js_code, height=0)
+
 # ----------------- 密碼權限控制 -----------------
 st.sidebar.header("🔐 系統管理登入")
 password = st.sidebar.text_input("請輸入管理密碼才能進行增修", type="password")
@@ -116,8 +152,21 @@ elif not is_authenticated:
 
 # ----------------- 主畫面：現有庫存總覽 -----------------
 st.subheader("📦 目前庫存總覽表")
+overview = df.copy()
+overview["進貨月份"] = overview["進貨日期"].map(format_month)
+status_stock = pd.to_numeric(
+    overview["上一次月份總庫存量"], errors="coerce"
+).fillna(pd.to_numeric(overview["總庫存量"], errors="coerce"))
+overview["補貨狀態"] = status_stock.map(
+    lambda stock: "結案" if pd.notna(stock) and stock > SAFETY_STOCK else "待補貨"
+)
 st.dataframe(
-    df[["項目"]],
+    overview.style.map(
+        lambda status: "color: red; font-weight: bold"
+        if status == "待補貨"
+        else "",
+        subset=["補貨狀態"],
+    ),
     use_container_width=True,
     hide_index=True,
 )
