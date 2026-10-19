@@ -13,8 +13,6 @@ st.set_page_config(
 
 # 資料儲存檔案
 DATA_FILE = "temple_inventory.csv"
-GOOGLE_SHEET_ID = "1yDjGjaJXyhEH_k-bijrdl_8wXP4zot6SFloW16Bx27A"
-GOOGLE_WORKSHEET_NAME = "龍天宮庫存系統"
 DATE_PATTERN = re.compile(r"^[0-9]{8}$")
 INTEGER_PATTERN = re.compile(r"^[0-9]+$")
 MONTH_NUMERALS = (
@@ -49,7 +47,6 @@ INVENTORY_COLUMNS = [
     "電話",
     "聯絡人",
 ]
-DELETE_ARCHIVE_COLUMNS = [*INVENTORY_COLUMNS, "刪除時間", "刪除批次ID"]
 
 
 def parse_date(value):
@@ -92,78 +89,55 @@ def get_delete_admin_password():
 
 def archive_deleted_rows(rows, deletion_id):
     try:
-        import gspread
-        from google.auth.exceptions import GoogleAuthError
-        from requests.exceptions import RequestException
+        import requests
     except ImportError as error:
         raise RuntimeError(
-            "缺少 Google Sheet 套件，請安裝 requirements.txt 中的依賴。"
+            "缺少 requests 套件，請安裝 requirements.txt 中的依賴。"
         ) from error
 
     try:
-        service_account = dict(st.secrets["gcp_service_account"])
+        web_app_url = st.secrets["APPS_SCRIPT_URL"]
+        archive_token = st.secrets["APPS_SCRIPT_TOKEN"]
     except (FileNotFoundError, KeyError) as error:
         raise RuntimeError(
-            "請在 Streamlit secrets 設定 [gcp_service_account] 服務帳戶憑證。"
+            "請在 Streamlit secrets 設定 APPS_SCRIPT_URL 和 APPS_SCRIPT_TOKEN。"
         ) from error
 
-    try:
-        if not service_account:
-            raise ValueError("服務帳戶憑證內容為空。")
-        client = gspread.service_account_from_dict(service_account)
-        worksheet = client.open_by_key(GOOGLE_SHEET_ID).worksheet(
-            GOOGLE_WORKSHEET_NAME
+    if not web_app_url or not archive_token:
+        raise RuntimeError(
+            "請在 Streamlit secrets 設定有效的 APPS_SCRIPT_URL 和 APPS_SCRIPT_TOKEN。"
         )
 
-        existing_values = worksheet.get_all_values()
-        if not existing_values:
-            worksheet.append_row(DELETE_ARCHIVE_COLUMNS, value_input_option="RAW")
-            header = DELETE_ARCHIVE_COLUMNS
-        else:
-            header = existing_values[0]
-            if header == INVENTORY_COLUMNS:
-                worksheet.update(
-                    "P1:Q1",
-                    [["刪除時間", "刪除批次ID"]],
-                    value_input_option="RAW",
-                )
-                header = DELETE_ARCHIVE_COLUMNS
-            elif header != DELETE_ARCHIVE_COLUMNS:
-                raise ValueError(
-                    f"Google Sheet「{GOOGLE_WORKSHEET_NAME}」第一列欄位與刪除紀錄格式不符。"
-                )
-
-        deletion_id_column = header.index("刪除批次ID")
-        if any(
-            len(row) > deletion_id_column and row[deletion_id_column] == deletion_id
-            for row in existing_values[1:]
-        ):
-            return
-
-        deleted_at = datetime.now().astimezone().isoformat(timespec="seconds")
-        values = [
-            [
-                ""
-                if pd.isna(row[column])
-                else row[column].item()
-                if hasattr(row[column], "item")
-                else row[column]
-                for column in INVENTORY_COLUMNS
-            ]
-            + [deleted_at, deletion_id]
-            for _, row in rows.iterrows()
+    deleted_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    values = [
+        [
+            ""
+            if pd.isna(row[column])
+            else row[column].item()
+            if hasattr(row[column], "item")
+            else row[column]
+            for column in INVENTORY_COLUMNS
         ]
-        worksheet.append_rows(values, value_input_option="RAW")
-    except (
-        FileNotFoundError,
-        KeyError,
-        TypeError,
-        ValueError,
-        OSError,
-        gspread.exceptions.GSpreadException,
-        GoogleAuthError,
-        RequestException,
-    ) as error:
+        for _, row in rows.iterrows()
+    ]
+    payload = {
+        "action": "archive_delete",
+        "token": archive_token,
+        "deletion_id": deletion_id,
+        "deleted_at": deleted_at,
+        "columns": INVENTORY_COLUMNS,
+        "rows": values,
+    }
+
+    try:
+        response = requests.post(web_app_url, json=payload, timeout=30)
+        response.raise_for_status()
+        result = response.json()
+        if not isinstance(result, dict) or not result.get("success"):
+            detail = result.get("error", "Apps Script did not confirm the archive") \
+                if isinstance(result, dict) else "Invalid Apps Script response"
+            raise RuntimeError(detail)
+    except (requests.RequestException, ValueError) as error:
         raise RuntimeError(f"Google Sheet 刪除紀錄寫入失敗：{error}") from error
 
 
@@ -176,6 +150,7 @@ def load_data():
                 "進貨日期": "string",
                 "使用日期": "string",
                 "盤點日期": "string",
+                "電話": "string",
             },
         )
         df = df.drop(columns=["補貨日期", "補貨數量"], errors="ignore")
@@ -311,7 +286,7 @@ else:
                 try:
                     archive_deleted_rows(deleted_rows, deletion_id)
                 except RuntimeError as error:
-                    st.error(str(error))
+                    st.error(f"Google Sheet 刪除紀錄寫入失敗：{error}")
                 else:
                     try:
                         updated_df.to_csv(DATA_FILE, index=False)
