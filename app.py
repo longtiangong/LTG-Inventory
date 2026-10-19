@@ -256,11 +256,9 @@ elif not is_authenticated:
 st.subheader("📦 目前庫存總覽表")
 overview = df.copy()
 overview["進貨月份"] = overview["進貨日期"].map(format_month)
-status_stock = pd.to_numeric(
-    overview["上一次月份總庫存量"], errors="coerce"
-).fillna(pd.to_numeric(overview["總庫存量"], errors="coerce"))
+status_stock = pd.to_numeric(overview["總庫存量"], errors="coerce")
 overview["補貨狀態"] = status_stock.map(
-    lambda stock: "結案" if pd.notna(stock) and stock > SAFETY_STOCK else "待補貨"
+    lambda stock: "結案" if pd.notna(stock) and stock >= SAFETY_STOCK else "待補貨"
 )
 st.dataframe(
     overview.style.map(
