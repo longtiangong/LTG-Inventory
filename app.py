@@ -214,7 +214,7 @@ for _, row in df.iterrows():
 
     if pd.notna(total_stock) and total_stock < SAFETY_STOCK:
         alerts.append(
-            f"【{item_name}】總庫存量 ({total_stock:g}包) 小於安全數量 {SAFETY_STOCK} 包！"
+            f"【{item_name}】總庫存量 ({total_stock:g}包) 小於安全數量 {SAFETY_STOCK} 包 待補貨！"
         )
     if pd.notna(check_stock) and check_stock < SAFETY_STOCK:
         alerts.append(
