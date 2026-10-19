@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import datetime
 import os
 import re
 import pandas as pd
@@ -101,42 +101,6 @@ df = load_data()
 st.title("⛩️ 宮廟物資庫存管理系統 {app_version}".format(app_version="v1.0"))
 st.markdown("---")
 
-# 安全存量設定
-SAFETY_STOCK = 100
-
-# ----------------- 警報檢查區 -----------------
-alerts = []
-for index, row in df.iterrows():
-    item_name = row["項目"]
-    total_stock = pd.to_numeric(row["總庫存量"], errors="coerce")
-    check_stock = pd.to_numeric(row["盤點數量"], errors="coerce")
-
-    if pd.notna(total_stock) and total_stock < SAFETY_STOCK:
-        alerts.append(f"【{item_name}】總庫存量 ({total_stock}包) 小於安全數量 {SAFETY_STOCK} 包！")
-    if pd.notna(check_stock) and check_stock < SAFETY_STOCK:
-        alerts.append(
-            f"【{item_name}】盤點數量 ({check_stock}包) 小於安全數量 {SAFETY_STOCK} 包！"
-        )
-
-if alerts:
-    st.error("🚨 庫存短缺警報：")
-    for alert in alerts:
-        st.markdown(
-            f'<p style="color:red; font-weight:bold; font-size:18px;">{alert}</p>',
-            unsafe_allow_html=True,
-        )
-
-    # 語音警報 (使用瀏覽器內建語音合成)
-    alert_text = "警告！" + "，".join(alerts)
-    js_code = f"""
-    <script>
-        const speech = new SpeechSynthesisUtterance("{alert_text}");
-        speech.lang = 'zh-TW';
-        window.speechSynthesis.speak(speech);
-    </script>
-    """
-    st.components.v1.html(js_code, height=0)
-
 # ----------------- 密碼權限控制 -----------------
 st.sidebar.header("🔐 系統管理登入")
 password = st.sidebar.text_input("請輸入管理密碼才能進行增修", type="password")
@@ -152,25 +116,10 @@ elif not is_authenticated:
 
 # ----------------- 主畫面：現有庫存總覽 -----------------
 st.subheader("📦 目前庫存總覽表")
-overview = df.copy()
-overview["進貨月份"] = overview["進貨日期"].map(format_month)
-status_stock = pd.to_numeric(
-    overview["上一次月份總庫存量"], errors="coerce"
-).fillna(pd.to_numeric(overview["總庫存量"], errors="coerce"))
-overview["補貨狀態"] = status_stock.map(
-    lambda stock: "結案" if pd.notna(stock) and stock > SAFETY_STOCK else "待補貨"
-)
-overview_display = overview.drop(
-    columns=["進貨日期", "進貨數量", "使用日期", "盤點日期"]
-)
 st.dataframe(
-    overview_display.style.map(
-        lambda status: "color: red; font-weight: bold"
-        if status == "待補貨"
-        else "",
-        subset=["補貨狀態"],
-    ),
+    df[["項目"]],
     use_container_width=True,
+    hide_index=True,
 )
 
 # ----------------- 增修管理區 (需密碼) -----------------
@@ -181,6 +130,23 @@ if is_authenticated:
     st.success("✅ 密碼驗證成功，您可以進行新增或修改。")
     if "save_message" in st.session_state:
         st.success(st.session_state.pop("save_message"))
+    if st.session_state.pop("clear_inventory_form", False):
+        st.session_state["selected_item"] = "請選擇項目"
+        for key in (
+            "custom_item",
+            "previous_month_stock",
+            "purchase_date",
+            "purchase_qty",
+            "use_date",
+            "use_item",
+            "use_qty",
+            "check_date",
+            "check_qty",
+            "supplier",
+            "phone",
+            "contact",
+        ):
+            st.session_state[key] = ""
 
     item_options = [
         "壽麵",
@@ -190,28 +156,23 @@ if is_authenticated:
         "光明燈油",
         "其他 (自行輸入)",
     ]
-    selected_item = st.selectbox("1. 項目", item_options)
+    selected_item = st.selectbox(
+        "1. 項目",
+        ["請選擇項目", *item_options],
+        key="selected_item",
+    )
     item = selected_item
     if selected_item == "其他 (自行輸入)":
-        item = st.text_input("輸入自訂項目名稱")
+        item = st.text_input("輸入自訂項目名稱", key="custom_item")
 
     existing_rows = df[df["項目"] == item]
     existing = existing_rows.iloc[0] if not existing_rows.empty else None
 
-    def existing_value(column, default):
-        if existing is None or pd.isna(existing[column]) or existing[column] == "":
-            return default
-        return existing[column]
-
-    current_date = date.today().strftime("%Y%m%d")
-    previous_month = format_month(
-        existing_value("進貨日期", current_date)
+    previous_month = (
+        format_month(existing["進貨日期"])
+        if existing is not None
+        else ""
     )
-    previous_month_stock_value = pd.to_numeric(
-        existing_value("上一次月份總庫存量", 0), errors="coerce"
-    )
-    if pd.isna(previous_month_stock_value):
-        previous_month_stock_value = 0
 
     with st.form("inventory_form"):
         col1, col2, col3 = st.columns(3)
@@ -220,85 +181,93 @@ if is_authenticated:
             st.text(f"2. 上一次月份：{previous_month}")
             previous_month_stock_text = st.text_input(
                 "3. 上一次月份總庫存量",
-                value=str(int(previous_month_stock_value)),
-                key=f"previous_month_stock_{item}",
+                key="previous_month_stock",
             )
             purchase_date = st.text_input(
                 "4. 進貨日期（西元年月日，共 8 碼）",
-                str(existing_value("進貨日期", current_date)),
-                key=f"purchase_date_{item}",
+                key="purchase_date",
             )
-            purchase_qty = st.number_input(
+            purchase_qty_text = st.text_input(
                 "5. 進貨數量",
-                min_value=0,
-                value=int(existing_value("進貨數量", 100)),
-                step=1,
-                key=f"purchase_qty_{item}",
+                key="purchase_qty",
             )
             use_date = st.text_input(
                 "6. 使用日期（西元年月日，共 8 碼）",
-                str(existing_value("使用日期", current_date)),
-                key=f"use_date_{item}",
+                key="use_date",
             )
 
         with col2:
             use_item = st.text_input(
                 "7. 使用項目",
-                str(existing_value("使用項目", "")),
-                key=f"use_item_{item}",
+                key="use_item",
             )
-            use_qty = st.number_input(
+            use_qty_text = st.text_input(
                 "8. 使用數量",
-                min_value=0,
-                value=int(existing_value("使用數量", 0)),
-                step=1,
-                key=f"use_qty_{item}",
+                key="use_qty",
             )
             check_date = st.text_input(
                 "9. 盤點日期（西元年月日，共 8 碼）",
-                str(existing_value("盤點日期", current_date)),
-                key=f"check_date_{item}",
+                key="check_date",
             )
-            check_qty = st.number_input(
+            check_qty_text = st.text_input(
                 "10. 盤點數量",
-                min_value=0,
-                value=int(existing_value("盤點數量", 0)),
-                step=1,
-                key=f"check_qty_{item}",
+                key="check_qty",
             )
 
-            calculated_stock = purchase_qty - use_qty
-            if check_qty > calculated_stock:
+            quantity_values = (
+                previous_month_stock_text,
+                purchase_qty_text,
+                use_qty_text,
+                check_qty_text,
+            )
+            quantities_valid = all(
+                INTEGER_PATTERN.fullmatch(value.strip())
+                for value in quantity_values
+            )
+            calculated_stock = (
+                int(purchase_qty_text) - int(use_qty_text)
+                if quantities_valid
+                else None
+            )
+            if calculated_stock is None:
+                result_status = ""
+            elif int(check_qty_text) > calculated_stock:
                 result_status = "盤盈"
-            elif check_qty < calculated_stock:
+            elif int(check_qty_text) < calculated_stock:
                 result_status = "盤虧"
             else:
                 result_status = "相符"
 
-            st.text(f"11. 結果自動判定：{result_status}")
+            st.text(f"11. 結果自動判定：{result_status or '待輸入數量'}")
 
         with col3:
-            st.metric(label="12. 總庫存量（進貨數量－使用數量）", value=calculated_stock)
+            st.metric(
+                label="12. 總庫存量（進貨數量－使用數量）",
+                value=calculated_stock if calculated_stock is not None else "—",
+            )
             supplier = st.text_input(
                 "13. 供應商名稱",
-                str(existing_value("供應商名稱", "龍口麵")),
-                key=f"supplier_{item}",
+                key="supplier",
             )
             phone = st.text_input(
                 "14. 電話",
-                str(existing_value("電話", "")),
-                key=f"phone_{item}",
+                key="phone",
             )
             contact = st.text_input(
                 "15. 聯絡人",
-                str(existing_value("聯絡人", "")),
-                key=f"contact_{item}",
+                key="contact",
             )
 
         submitted = st.form_submit_button("儲存 / 更新庫存資料")
 
         if submitted:
             previous_month_stock_text = previous_month_stock_text.strip()
+            quantity_fields = {
+                "上一次月份總庫存量": previous_month_stock_text,
+                "進貨數量": purchase_qty_text.strip(),
+                "使用數量": use_qty_text.strip(),
+                "盤點數量": check_qty_text.strip(),
+            }
             invalid_dates = [
                 label
                 for label, value in (
@@ -308,10 +277,25 @@ if is_authenticated:
                 )
                 if parse_date(value) is None
             ]
-            if not item.strip():
+            missing_fields = [
+                label
+                for label, value in (
+                    ("使用項目", use_item),
+                    ("供應商名稱", supplier),
+                    ("電話", phone),
+                    ("聯絡人", contact),
+                )
+                if not value.strip()
+            ]
+            if selected_item == "請選擇項目" or not item.strip():
                 st.error("請輸入項目名稱。")
-            elif not INTEGER_PATTERN.fullmatch(previous_month_stock_text):
-                st.error("上一次月份總庫存量請輸入 0 或正整數，不可包含加減符號。")
+            elif any(
+                not INTEGER_PATTERN.fullmatch(value)
+                for value in quantity_fields.values()
+            ):
+                st.error("所有數量欄位皆須填寫 0 或正整數，不可留白或包含加減符號。")
+            elif missing_fields:
+                st.error("以下欄位不可留白：" + "、".join(missing_fields))
             elif invalid_dates:
                 st.error(
                     "日期格式錯誤或日期不存在，請輸入 8 碼有效西元日期（YYYYMMDD）："
@@ -323,12 +307,12 @@ if is_authenticated:
                     "上一次月份": previous_month,
                     "上一次月份總庫存量": int(previous_month_stock_text),
                     "進貨日期": purchase_date,
-                    "進貨數量": purchase_qty,
+                    "進貨數量": int(purchase_qty_text),
                     "使用日期": use_date,
                     "使用項目": use_item,
-                    "使用數量": use_qty,
+                    "使用數量": int(use_qty_text),
                     "盤點日期": check_date,
-                    "盤點數量": check_qty,
+                    "盤點數量": int(check_qty_text),
                     "結果": result_status,
                     "總庫存量": calculated_stock,
                     "供應商名稱": supplier,
@@ -336,7 +320,11 @@ if is_authenticated:
                     "聯絡人": contact,
                 }
 
-                updated_df = df[df["項目"] != item]
+                updated_df = (
+                    df[df["項目"] != item]
+                    if item in df["項目"].values
+                    else df
+                )
                 updated_df = pd.concat(
                     [updated_df, pd.DataFrame([new_row])], ignore_index=True
                 )[INVENTORY_COLUMNS]
@@ -346,6 +334,7 @@ if is_authenticated:
                     st.error(f"庫存資料儲存失敗：{error}")
                 else:
                     st.session_state["save_message"] = f"【{item}】資料已成功更新！"
+                    st.session_state["clear_inventory_form"] = True
                     st.rerun()
 else:
     st.warning("🔒 請先於左側側邊欄輸入正確密碼，解鎖後即可編輯表單。")
