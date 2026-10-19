@@ -103,13 +103,13 @@ if alerts:
 # ----------------- 密碼權限控制 -----------------
 st.sidebar.header("🔐 系統管理登入")
 password = st.sidebar.text_input("請輸入管理密碼才能進行增修", type="password")
-#提示密碼 ltg+生日 (您可自行修改)
+#提示密碼設定為 ltg6399 (您可自行修改)
 AUTH_PASSWORD = "ltg6399"
 
 is_authenticated = password == AUTH_PASSWORD
 
 if not password:
-    st.sidebar.info("提示：預設登入密碼為 `ltg6399`")
+    st.sidebar.info("提示：預設登入密碼為 `ltg+生日`")
 elif not is_authenticated:
     st.sidebar.error("密碼錯誤，無法進行新增與修改！")
 
