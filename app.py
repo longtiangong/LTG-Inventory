@@ -2,6 +2,7 @@ from datetime import datetime
 import json
 import os
 import re
+from uuid import uuid4
 import pandas as pd
 import streamlit as st
 
@@ -12,6 +13,8 @@ st.set_page_config(
 
 # 資料儲存檔案
 DATA_FILE = "temple_inventory.csv"
+GOOGLE_SHEET_ID = "1yDjGjaJXyhEH_k-bijrdl_8wXP4zot6SFloW16Bx27A"
+GOOGLE_WORKSHEET_NAME = "龍天宮庫存系統"
 DATE_PATTERN = re.compile(r"^[0-9]{8}$")
 INTEGER_PATTERN = re.compile(r"^[0-9]+$")
 MONTH_NUMERALS = (
@@ -46,6 +49,7 @@ INVENTORY_COLUMNS = [
     "電話",
     "聯絡人",
 ]
+DELETE_ARCHIVE_COLUMNS = [*INVENTORY_COLUMNS, "刪除時間", "刪除批次ID"]
 
 
 def parse_date(value):
@@ -77,6 +81,90 @@ def latest_item_record(item_rows):
     if dated_rows.empty:
         return item_rows.iloc[-1]
     return dated_rows.loc[purchase_dates.loc[dated_rows.index].idxmax()]
+
+
+def get_delete_admin_password():
+    try:
+        return st.secrets["DELETE_ADMIN_PASSWORD"]
+    except (FileNotFoundError, KeyError):
+        return None
+
+
+def archive_deleted_rows(rows, deletion_id):
+    try:
+        import gspread
+        from google.auth.exceptions import GoogleAuthError
+        from requests.exceptions import RequestException
+    except ImportError as error:
+        raise RuntimeError(
+            "缺少 Google Sheet 套件，請安裝 requirements.txt 中的依賴。"
+        ) from error
+
+    try:
+        service_account = dict(st.secrets["gcp_service_account"])
+    except (FileNotFoundError, KeyError) as error:
+        raise RuntimeError(
+            "請在 Streamlit secrets 設定 [gcp_service_account] 服務帳戶憑證。"
+        ) from error
+
+    try:
+        if not service_account:
+            raise ValueError("服務帳戶憑證內容為空。")
+        client = gspread.service_account_from_dict(service_account)
+        worksheet = client.open_by_key(GOOGLE_SHEET_ID).worksheet(
+            GOOGLE_WORKSHEET_NAME
+        )
+
+        existing_values = worksheet.get_all_values()
+        if not existing_values:
+            worksheet.append_row(DELETE_ARCHIVE_COLUMNS, value_input_option="RAW")
+            header = DELETE_ARCHIVE_COLUMNS
+        else:
+            header = existing_values[0]
+            if header == INVENTORY_COLUMNS:
+                worksheet.update(
+                    "P1:Q1",
+                    [["刪除時間", "刪除批次ID"]],
+                    value_input_option="RAW",
+                )
+                header = DELETE_ARCHIVE_COLUMNS
+            elif header != DELETE_ARCHIVE_COLUMNS:
+                raise ValueError(
+                    f"Google Sheet「{GOOGLE_WORKSHEET_NAME}」第一列欄位與刪除紀錄格式不符。"
+                )
+
+        deletion_id_column = header.index("刪除批次ID")
+        if any(
+            len(row) > deletion_id_column and row[deletion_id_column] == deletion_id
+            for row in existing_values[1:]
+        ):
+            return
+
+        deleted_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        values = [
+            [
+                ""
+                if pd.isna(row[column])
+                else row[column].item()
+                if hasattr(row[column], "item")
+                else row[column]
+                for column in INVENTORY_COLUMNS
+            ]
+            + [deleted_at, deletion_id]
+            for _, row in rows.iterrows()
+        ]
+        worksheet.append_rows(values, value_input_option="RAW")
+    except (
+        FileNotFoundError,
+        KeyError,
+        TypeError,
+        ValueError,
+        OSError,
+        gspread.exceptions.GSpreadException,
+        GoogleAuthError,
+        RequestException,
+    ) as error:
+        raise RuntimeError(f"Google Sheet 刪除紀錄寫入失敗：{error}") from error
 
 
 # 初始化資料結構
@@ -185,11 +273,22 @@ st.dataframe(
     hide_index=True,
 )
 
-if is_authenticated:
-    st.markdown("#### 🗑️ 刪除庫存項目")
+st.markdown("#### 🗑️ 刪除庫存項目")
+delete_admin_password = get_delete_admin_password()
+if not delete_admin_password:
+    st.warning(
+        "尚未設定刪除管理員密碼，請在 Streamlit secrets 設定 "
+        "DELETE_ADMIN_PASSWORD。"
+    )
+else:
     item_names = sorted(df["項目"].dropna().astype(str).unique().tolist())
     if item_names:
         with st.form("delete_inventory_form"):
+            delete_password_input = st.text_input(
+                "刪除管理員密碼",
+                type="password",
+                key="delete_admin_password_input",
+            )
             item_to_delete = st.selectbox("選擇要刪除的項目", item_names)
             confirmed = st.checkbox(
                 f"我確認刪除「{item_to_delete}」及其所有庫存資料"
@@ -197,23 +296,42 @@ if is_authenticated:
             delete_submitted = st.form_submit_button("確認刪除")
 
         if delete_submitted:
-            if not confirmed:
+            if delete_password_input != delete_admin_password:
+                st.error("刪除管理員密碼錯誤，無法刪除項目。")
+            elif not confirmed:
                 st.error("請先勾選確認，才能刪除項目。")
             else:
+                deleted_rows = df[df["項目"].astype(str) == item_to_delete]
+                pending_delete_ids = dict(
+                    st.session_state.get("pending_delete_ids", {})
+                )
+                deletion_id = pending_delete_ids.setdefault(
+                    item_to_delete, uuid4().hex
+                )
+                st.session_state["pending_delete_ids"] = pending_delete_ids
                 updated_df = df[df["項目"].astype(str) != item_to_delete]
                 try:
-                    updated_df.to_csv(DATA_FILE, index=False)
-                except OSError as error:
-                    st.error(f"刪除資料儲存失敗：{error}")
+                    archive_deleted_rows(deleted_rows, deletion_id)
+                except RuntimeError as error:
+                    st.error(str(error))
                 else:
-                    st.session_state["delete_message"] = (
-                        f"【{item_to_delete}】及其庫存資料已成功刪除。"
-                    )
-                    st.rerun()
+                    try:
+                        updated_df.to_csv(DATA_FILE, index=False)
+                    except OSError as error:
+                        st.error(
+                            f"刪除紀錄已寫入 Google Sheet，但本機庫存檔刪除失敗：{error}"
+                        )
+                    else:
+                        pending_delete_ids.pop(item_to_delete, None)
+                        st.session_state["pending_delete_ids"] = pending_delete_ids
+                        st.session_state["delete_message"] = (
+                            f"【{item_to_delete}】已存入 Google Sheet 並從庫存移除。"
+                        )
+                        st.rerun()
     else:
         st.info("目前沒有可刪除的庫存項目。")
-    if "delete_message" in st.session_state:
-        st.success(st.session_state.pop("delete_message"))
+if "delete_message" in st.session_state:
+    st.success(st.session_state.pop("delete_message"))
 
 # ----------------- 增修管理區 (需密碼) -----------------
 st.markdown("---")
