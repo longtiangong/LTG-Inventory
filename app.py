@@ -197,11 +197,11 @@ if is_authenticated:
                 "聯絡人": contact,
             }
 
-            # 若該項目已存在則更新，否則新增
+            # 【修正處】：若該項目已存在，先過濾掉舊的，再與新資料合併，避開型態錯誤
             if item in df["項目"].values:
-                df.loc[df["項目"] == item, :] = list(new_row.values())
-            else:
-                df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+                df = df[df["項目"] != item]
+
+            df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
 
             df.to_csv(DATA_FILE, index=False)
             st.success(f"【{item}】資料已成功更新！")
