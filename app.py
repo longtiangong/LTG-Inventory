@@ -176,7 +176,7 @@ def load_data():
 
 df = load_data()
 
-st.title("⛩️ 宮廟物資庫存管理系統 {app_version}".format(app_version="v1.0"))
+st.title("⛩️ 龍天宮物資庫存管理系統 {app_version}".format(app_version="v1.0"))
 st.markdown("---")
 
 # ----------------- 警報檢查區 -----------------
