@@ -65,6 +65,20 @@ def format_month(value):
     return f"{parsed_date.year}{MONTH_NUMERALS[parsed_date.month]}月"
 
 
+def latest_item_record(item_rows):
+    if item_rows.empty:
+        return None
+    purchase_dates = pd.to_datetime(
+        item_rows["進貨日期"].astype("string"),
+        format="%Y%m%d",
+        errors="coerce",
+    )
+    dated_rows = item_rows.loc[purchase_dates.notna()]
+    if dated_rows.empty:
+        return item_rows.iloc[-1]
+    return dated_rows.loc[purchase_dates.loc[dated_rows.index].idxmax()]
+
+
 # 初始化資料結構
 def load_data():
     if os.path.exists(DATA_FILE):
@@ -181,6 +195,7 @@ if is_authenticated:
         st.success(st.session_state.pop("save_message"))
     if st.session_state.pop("clear_inventory_form", False):
         st.session_state["selected_item"] = "請選擇項目"
+        st.session_state["last_form_item"] = "請選擇項目"
         for key in (
             "custom_item",
             "previous_month_stock",
@@ -215,12 +230,29 @@ if is_authenticated:
         item = st.text_input("輸入自訂項目名稱", key="custom_item")
 
     existing_rows = df[df["項目"] == item]
-    existing = existing_rows.iloc[0] if not existing_rows.empty else None
+    existing = latest_item_record(existing_rows)
+
+    if st.session_state.get("last_form_item") != item:
+        previous_stock = (
+            pd.to_numeric(existing["總庫存量"], errors="coerce")
+            if existing is not None
+            else None
+        )
+        if previous_stock is None or pd.isna(previous_stock):
+            previous_stock = (
+                pd.to_numeric(existing["上一次月份總庫存量"], errors="coerce")
+                if existing is not None
+                else None
+            )
+        st.session_state["previous_month_stock"] = (
+            str(int(previous_stock))
+            if previous_stock is not None and pd.notna(previous_stock)
+            else ""
+        )
+        st.session_state["last_form_item"] = item
 
     previous_month = (
-        format_month(existing["進貨日期"])
-        if existing is not None
-        else ""
+        format_month(existing["進貨日期"]) if existing is not None else ""
     )
 
     with st.form("inventory_form"):
