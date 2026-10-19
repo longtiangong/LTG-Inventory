@@ -31,6 +31,7 @@ def load_data():
                 "補貨日期",
                 "補貨數量",
                 "總庫存量",
+                "上一次月份總庫存量",
                 "供應商名稱",
                 "電話",
                 "聯絡人",
@@ -60,6 +61,8 @@ def load_data():
 
 
 df = load_data()
+if "上一次月份總庫存量" not in df.columns:
+    df["上一次月份總庫存量"] = pd.NA
 
 st.title("⛩️ 宮廟物資庫存管理系統 {app_version}".format(app_version="v1.0"))
 st.markdown("---")
@@ -115,7 +118,22 @@ elif not is_authenticated:
 
 # ----------------- 主畫面：現有庫存總覽 -----------------
 st.subheader("📦 目前庫存總覽表")
-st.dataframe(df, use_container_width=True)
+overview = df.copy()
+restock_dates = pd.to_datetime(
+    overview["補貨日期"].astype("string").str.replace(r"\.0$", "", regex=True),
+    format="%Y%m%d",
+    errors="coerce",
+)
+overview["補貨月份"] = restock_dates.map(
+    lambda date: f"{date.month}月" if not pd.isna(date) else "未設定"
+)
+status_stock = pd.to_numeric(
+    overview["上一次月份總庫存量"], errors="coerce"
+).fillna(pd.to_numeric(overview["總庫存量"], errors="coerce"))
+overview["補貨狀態"] = status_stock.map(
+    lambda stock: "結案" if pd.notna(stock) and stock > SAFETY_STOCK else "待補貨"
+)
+st.dataframe(overview, use_container_width=True)
 
 # ----------------- 增修管理區 (需密碼) -----------------
 st.markdown("---")
@@ -164,17 +182,21 @@ if is_authenticated:
             st.text(f"9. 結果自動判定：{result_status}")
 
             restock_date2 = st.text_input("10. 補貨日期 (例: 20261021)", "20261021")
+            previous_month_stock = st.number_input(
+                "11. 上一次月份總庫存量（進貨前）", min_value=0, value=0, step=1
+            )
+            st.caption("此數量用於判斷補貨狀態：大於安全庫存結案，否則待補貨。")
 
         with col3:
-            restock_qty2 = st.number_input("11. 補貨數量", value=100)
+            restock_qty2 = st.number_input("12. 補貨數量", value=100)
 
             # 自動計算總庫存量 = 盤點數量 + 第二次補貨數量
             total_inventory = check_qty + restock_qty2
-            st.metric(label="12. 總庫存量 (自動計算)", value=total_inventory)
+            st.metric(label="13. 總庫存量 (自動計算)", value=total_inventory)
 
-            supplier = st.text_input("13. 供應商名稱", "龍口麵")
-            phone = st.text_input("14. 電話", "0910143517")
-            contact = st.text_input("15. 聯絡人", "張智順")
+            supplier = st.text_input("14. 供應商名稱", "龍口麵")
+            phone = st.text_input("15. 電話", "0910143517")
+            contact = st.text_input("16. 聯絡人", "張智順")
 
         submitted = st.form_submit_button("儲存 / 更新庫存資料")
 
@@ -192,6 +214,7 @@ if is_authenticated:
                 "補貨日期": restock_date2,
                 "補貨數量": restock_qty2,
                 "總庫存量": total_inventory,
+                "上一次月份總庫存量": previous_month_stock,
                 "供應商名稱": supplier,
                 "電話": phone,
                 "聯絡人": contact,
