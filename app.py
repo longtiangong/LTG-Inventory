@@ -185,6 +185,36 @@ st.dataframe(
     hide_index=True,
 )
 
+if is_authenticated:
+    st.markdown("#### 🗑️ 刪除庫存項目")
+    item_names = sorted(df["項目"].dropna().astype(str).unique().tolist())
+    if item_names:
+        with st.form("delete_inventory_form"):
+            item_to_delete = st.selectbox("選擇要刪除的項目", item_names)
+            confirmed = st.checkbox(
+                f"我確認刪除「{item_to_delete}」及其所有庫存資料"
+            )
+            delete_submitted = st.form_submit_button("確認刪除")
+
+        if delete_submitted:
+            if not confirmed:
+                st.error("請先勾選確認，才能刪除項目。")
+            else:
+                updated_df = df[df["項目"].astype(str) != item_to_delete]
+                try:
+                    updated_df.to_csv(DATA_FILE, index=False)
+                except OSError as error:
+                    st.error(f"刪除資料儲存失敗：{error}")
+                else:
+                    st.session_state["delete_message"] = (
+                        f"【{item_to_delete}】及其庫存資料已成功刪除。"
+                    )
+                    st.rerun()
+    else:
+        st.info("目前沒有可刪除的庫存項目。")
+    if "delete_message" in st.session_state:
+        st.success(st.session_state.pop("delete_message"))
+
 # ----------------- 增修管理區 (需密碼) -----------------
 st.markdown("---")
 st.subheader("📝 庫存資料增修作業")
