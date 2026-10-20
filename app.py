@@ -46,9 +46,19 @@ INVENTORY_COLUMNS = [
     "供應商名稱",
     "電話",
     "聯絡人",
-    "安全庫存量",
 ]
-DEFAULT_SAFETY_STOCK = 100
+SAFETY_STOCK = {
+    "壽麵": 96,
+    "香品": 100,
+    "金紙": 80,
+    "平安符": 30,
+    "光明燈油": 30,
+    "其他 (自行輸入)": 50,
+}
+
+
+def safety_stock_for(item_name):
+    return SAFETY_STOCK.get(item_name, SAFETY_STOCK["其他 (自行輸入)"])
 
 
 def parse_date(value):
@@ -164,18 +174,13 @@ def load_data():
             df["上一次月份總庫存量"] = 0
         for column in INVENTORY_COLUMNS:
             if column not in df.columns:
-                if column == "安全庫存量":
-                    df[column] = DEFAULT_SAFETY_STOCK
-                elif column in {
+                df[column] = 0 if column in {
                     "上一次月份總庫存量",
                     "進貨數量",
                     "使用數量",
                     "盤點數量",
                     "總庫存量",
-                }:
-                    df[column] = 0
-                else:
-                    df[column] = ""
+                } else ""
         return df[INVENTORY_COLUMNS]
 
     return pd.DataFrame(columns=INVENTORY_COLUMNS)
@@ -192,23 +197,15 @@ for _, row in df.iterrows():
     item_name = row["項目"]
     total_stock = pd.to_numeric(row["總庫存量"], errors="coerce")
     check_stock = pd.to_numeric(row["盤點數量"], errors="coerce")
-    safety_stock = pd.to_numeric(row["安全庫存量"], errors="coerce")
+    safety_stock = safety_stock_for(item_name)
 
-    if (
-        pd.notna(safety_stock)
-        and pd.notna(total_stock)
-        and total_stock < safety_stock
-    ):
+    if pd.notna(total_stock) and total_stock < safety_stock:
         alerts.append(
-            f"【{item_name}】總庫存量 ({total_stock:g}包) 小於安全數量 {safety_stock:g} 包 待補貨！"
+            f"【{item_name}】總庫存量 ({total_stock:g}包) 小於安全數量 {safety_stock} 包 待補貨！"
         )
-    if (
-        pd.notna(safety_stock)
-        and pd.notna(check_stock)
-        and check_stock < safety_stock
-    ):
+    if pd.notna(check_stock) and check_stock < safety_stock:
         alerts.append(
-            f"【{item_name}】盤點數量 ({check_stock:g}包) 小於安全數量 {safety_stock:g} 包！"
+            f"【{item_name}】盤點數量 ({check_stock:g}包) 小於安全數量 {safety_stock} 包！"
         )
 
 if alerts:
@@ -247,12 +244,11 @@ st.subheader("📦 目前庫存總覽表")
 overview = df.copy()
 overview["進貨月份"] = overview["進貨日期"].map(format_month)
 status_stock = pd.to_numeric(overview["總庫存量"], errors="coerce")
-overview_safety_stock = pd.to_numeric(overview["安全庫存量"], errors="coerce")
 overview["補貨狀態"] = [
     "結案"
-    if pd.notna(stock) and pd.notna(safety_stock) and stock >= safety_stock
+    if pd.notna(stock) and stock >= safety_stock_for(item_name)
     else "待補貨"
-    for stock, safety_stock in zip(status_stock, overview_safety_stock)
+    for item_name, stock in zip(overview["項目"], status_stock)
 ]
 st.dataframe(
     overview.style.map(
@@ -349,7 +345,6 @@ if is_authenticated:
             "supplier",
             "phone",
             "contact",
-            "safety_stock",
         ):
             st.session_state[key] = ""
 
@@ -390,17 +385,6 @@ if is_authenticated:
             if previous_stock is not None and pd.notna(previous_stock)
             else ""
         )
-        existing_safety_stock = (
-            pd.to_numeric(existing["安全庫存量"], errors="coerce")
-            if existing is not None
-            else None
-        )
-        st.session_state["safety_stock"] = (
-            str(int(existing_safety_stock))
-            if existing_safety_stock is not None
-            and pd.notna(existing_safety_stock)
-            else str(DEFAULT_SAFETY_STOCK)
-        )
         st.session_state["last_form_item"] = item
 
     previous_month = (
@@ -412,10 +396,6 @@ if is_authenticated:
 
         with col1:
             st.text(f"2. 上一次月份：{previous_month}")
-            safety_stock_text = st.text_input(
-                "安全庫存量",
-                key="safety_stock",
-            )
             previous_month_stock_text = st.text_input(
                 "3. 上一次月份總庫存量",
                 key="previous_month_stock",
@@ -502,7 +482,6 @@ if is_authenticated:
         if submitted:
             previous_month_stock_text = previous_month_stock_text.strip()
             quantity_fields = {
-                "安全庫存量": safety_stock_text.strip(),
                 "上一次月份總庫存量": previous_month_stock_text,
                 "進貨數量": purchase_qty_text.strip(),
                 "使用數量": use_qty_text.strip(),
@@ -558,7 +537,6 @@ if is_authenticated:
                     "供應商名稱": supplier,
                     "電話": phone,
                     "聯絡人": contact,
-                    "安全庫存量": int(safety_stock_text.strip()),
                 }
 
                 updated_df = (
