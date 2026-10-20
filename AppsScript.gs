@@ -16,7 +16,9 @@ const INVENTORY_COLUMNS = [
   "供應商名稱",
   "電話",
   "聯絡人",
+  "安全庫存量",
 ];
+const LEGACY_INVENTORY_COLUMNS = INVENTORY_COLUMNS.slice(0, -1);
 const ARCHIVE_COLUMNS = [...INVENTORY_COLUMNS, "刪除時間", "刪除批次ID"];
 
 function jsonResponse(body) {
@@ -86,6 +88,27 @@ function doPost(event) {
           .getRange(1, 1, 1, ARCHIVE_COLUMNS.length)
           .getDisplayValues()[0];
         if (header.every((value) => value === "")) {
+          sheet.getRange(1, 1, 1, ARCHIVE_COLUMNS.length).setValues([
+            ARCHIVE_COLUMNS,
+          ]);
+        } else if (
+          JSON.stringify(header.slice(0, LEGACY_INVENTORY_COLUMNS.length)) ===
+            JSON.stringify(LEGACY_INVENTORY_COLUMNS) &&
+          header[LEGACY_INVENTORY_COLUMNS.length] === "刪除時間" &&
+          header[LEGACY_INVENTORY_COLUMNS.length + 1] === "刪除批次ID"
+        ) {
+          sheet.insertColumnAfter(LEGACY_INVENTORY_COLUMNS.length);
+          sheet.getRange(1, 1, 1, ARCHIVE_COLUMNS.length).setValues([
+            ARCHIVE_COLUMNS,
+          ]);
+        } else if (
+          JSON.stringify(header.slice(0, LEGACY_INVENTORY_COLUMNS.length)) ===
+            JSON.stringify(LEGACY_INVENTORY_COLUMNS) &&
+          header
+            .slice(LEGACY_INVENTORY_COLUMNS.length)
+            .every((value) => value === "")
+        ) {
+          sheet.insertColumnAfter(LEGACY_INVENTORY_COLUMNS.length);
           sheet.getRange(1, 1, 1, ARCHIVE_COLUMNS.length).setValues([
             ARCHIVE_COLUMNS,
           ]);
