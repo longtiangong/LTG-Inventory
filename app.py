@@ -48,7 +48,7 @@ INVENTORY_COLUMNS = [
     "聯絡人",
 ]
 SAFETY_STOCK = {
-    "壽麵": 96,
+    "麵線": 96,
     "香品": 100,
     "金紙": 80,
     "平安符": 30,
@@ -349,7 +349,7 @@ if is_authenticated:
             st.session_state[key] = ""
 
     item_options = [
-        "壽麵",
+        "麵線",
         "香品",
         "金紙",
         "平安符",
