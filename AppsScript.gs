@@ -1,5 +1,7 @@
 const SPREADSHEET_ID = "1yDjGjaJXyhEH_k-bijrdl_8wXP4zot6SFloW16Bx27A";
 const WORKSHEET_NAME = "龍天宮庫存系統";
+const SUPPLIER_SPREADSHEET_ID = "1aEmkcxgKj87ImELehKFvwq3pMaVM1_sfkowFsJSeyq8";
+const SUPPLIER_SHEET_ID = 0;
 const INVENTORY_COLUMNS = [
   "項目",
   "上一次月份",
@@ -41,6 +43,29 @@ function literalCellValue(value) {
   return value;
 }
 
+function getSupplierDirectory() {
+  const spreadsheet = SpreadsheetApp.openById(SUPPLIER_SPREADSHEET_ID);
+  const sheet = spreadsheet.getSheetById(SUPPLIER_SHEET_ID);
+  if (!sheet) throw new Error(`Supplier worksheet not found: ${SUPPLIER_SHEET_ID}`);
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow === 0) return [];
+
+  const rows = sheet.getRange(1, 4, lastRow, 4).getDisplayValues();
+  const headerValues = rows[0].map((value) => value.trim());
+  const hasHeader = headerValues.some((value) =>
+    ["項目", "品項", "品名", "供應商名稱", "電話", "聯絡人"].includes(value),
+  );
+  return (hasHeader ? rows.slice(1) : rows)
+    .map(([item, supplier, phone, contact]) => ({
+      item: item.trim(),
+      supplier: supplier.trim(),
+      phone: phone.trim(),
+      contact: contact.trim(),
+    }))
+    .filter((row) => row.item);
+}
+
 function doPost(event) {
   try {
     const request = JSON.parse(event.postData.contents);
@@ -53,6 +78,12 @@ function doPost(event) {
       !constantTimeEquals(request.token, configuredToken)
     ) {
       return jsonResponse({ success: false, error: "Invalid token" });
+    }
+    if (request.action === "list_suppliers") {
+      return jsonResponse({
+        success: true,
+        suppliers: getSupplierDirectory(),
+      });
     }
     if (
       request.action !== "archive_delete" ||

@@ -4,6 +4,7 @@ import os
 import re
 from uuid import uuid4
 import pandas as pd
+import requests
 import streamlit as st
 
 # 設定網頁標題
@@ -99,14 +100,33 @@ def get_delete_admin_password():
         return None
 
 
-def archive_deleted_rows(rows, deletion_id):
+@st.cache_data(ttl=300, show_spinner=False)
+def load_supplier_directory(web_app_url, access_token):
     try:
-        import requests
-    except ImportError as error:
-        raise RuntimeError(
-            "缺少 requests 套件，請安裝 requirements.txt 中的依賴。"
-        ) from error
+        response = requests.post(
+            web_app_url,
+            json={"action": "list_suppliers", "token": access_token},
+            timeout=30,
+        )
+        response.raise_for_status()
+        result = response.json()
+    except (requests.RequestException, ValueError) as error:
+        raise RuntimeError(f"Google Sheet 供應商資料讀取失敗：{error}") from error
 
+    if not isinstance(result, dict) or not result.get("success"):
+        detail = (
+            result.get("error", "Apps Script did not return supplier data")
+            if isinstance(result, dict)
+            else "Invalid Apps Script response"
+        )
+        raise RuntimeError(f"Google Sheet 供應商資料讀取失敗：{detail}")
+    suppliers = result.get("suppliers")
+    if not isinstance(suppliers, list):
+        raise RuntimeError("Google Sheet 供應商資料讀取失敗：回傳格式不正確。")
+    return suppliers
+
+
+def archive_deleted_rows(rows, deletion_id):
     try:
         web_app_url = st.secrets["APPS_SCRIPT_URL"]
         archive_token = st.secrets["APPS_SCRIPT_TOKEN"]
@@ -327,6 +347,41 @@ st.subheader("📝 庫存資料增修作業")
 
 if is_authenticated:
     st.success("✅ 密碼驗證成功，您可以進行新增或修改。")
+    try:
+        supplier_web_app_url = st.secrets["APPS_SCRIPT_URL"]
+        supplier_access_token = st.secrets["APPS_SCRIPT_TOKEN"]
+        if not supplier_web_app_url or not supplier_access_token:
+            raise RuntimeError(
+                "請在 Streamlit secrets 設定有效的 APPS_SCRIPT_URL 和 "
+                "APPS_SCRIPT_TOKEN。"
+            )
+        supplier_rows = load_supplier_directory(
+            supplier_web_app_url, supplier_access_token
+        )
+        supplier_load_error = None
+    except (FileNotFoundError, KeyError):
+        supplier_rows = []
+        supplier_load_error = (
+            "請在 Streamlit secrets 設定 APPS_SCRIPT_URL 和 APPS_SCRIPT_TOKEN。"
+        )
+    except RuntimeError as error:
+        supplier_rows = []
+        supplier_load_error = str(error)
+    if supplier_load_error:
+        st.warning(f"{supplier_load_error}，仍可手動填寫供應商資料。")
+
+    supplier_directory = {}
+    for supplier_row in supplier_rows:
+        if not isinstance(supplier_row, dict):
+            continue
+        supplier_item = str(supplier_row.get("item", "")).strip()
+        if supplier_item:
+            supplier_directory[supplier_item] = {
+                "supplier": str(supplier_row.get("supplier", "")).strip(),
+                "phone": str(supplier_row.get("phone", "")).strip(),
+                "contact": str(supplier_row.get("contact", "")).strip(),
+            }
+
     if "save_message" in st.session_state:
         st.success(st.session_state.pop("save_message"))
     if st.session_state.pop("clear_inventory_form", False):
@@ -385,6 +440,10 @@ if is_authenticated:
             if previous_stock is not None and pd.notna(previous_stock)
             else ""
         )
+        supplier_info = supplier_directory.get(item, {})
+        st.session_state["supplier"] = supplier_info.get("supplier", "")
+        st.session_state["phone"] = supplier_info.get("phone", "")
+        st.session_state["contact"] = supplier_info.get("contact", "")
         st.session_state["last_form_item"] = item
 
     previous_month = (
